@@ -13,16 +13,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Step-3.7 specs (HF model type ``step3p7``).
+"""Step-3.7 PTQ modeling (HF model type ``step3p7``).
 
-Shares Step-3.5's architecture; its PTQ modeling lives in ``step3p5/modeling_ptq.py``,
-which matches every Step revision.
+Step-3.7 shares Step-3.5's expert-indexed ``MoELinear`` layout, so its PTQ support is the
+Step-family code in ``step3p5/modeling_ptq.py``, which matches every Step revision. This
+module imports it, so that loading the PTQ modeling for model type ``step3p7`` by name
+registers that support too.
 """
 
-from ..specs import ModelSpec, register
+from ..step3p5 import modeling_ptq as _step3p5_modeling_ptq  # noqa: F401
 
 __all__: list[str] = []
-
-# Native in transformers since 5.16. No MoESpec, for the same reasons as step3p5 (see
-# step3p5/specs.py).
-register(ModelSpec(model_type="step3p7", min_transformers_version="5.16"))
