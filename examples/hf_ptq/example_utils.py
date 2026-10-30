@@ -600,6 +600,7 @@ def get_model(
     trust_remote_code=False,
     use_seq_device_map=False,
     attn_implementation=None,
+    experts_implementation=None,
     offload_folder=None,
     max_cpu_memory_gb=None,
     max_gpu_memory_gb=None,
@@ -641,6 +642,11 @@ def get_model(
     # Note: Forcibly converting the model precision between bf16 and fp16 may introduce accuracy drop
     model_kwargs = config_kwargs.copy()
     model_kwargs.setdefault("dtype", "auto")
+    # Only when asked, on every load below: an explicit None is a value transformers stores.
+    experts_kwargs = (
+        {} if experts_implementation is None else {"experts_implementation": experts_implementation}
+    )
+    model_kwargs.update(experts_kwargs)
 
     # DiffusionGemma ties encoder/decoder weights. device_map "auto" (balanced) can split
     # a tied pair across GPUs, leaving one side on the meta device and breaking generation.
@@ -720,6 +726,7 @@ def get_model(
                 device_map="auto",
                 trust_remote_code=trust_remote_code,
                 dtype="auto",
+                **experts_kwargs,
             )
     elif get_original_hf_quant_method(hf_config) == "mxfp4":
         # Native MXFP4 checkpoints (e.g. openai/gpt-oss-*) must be dequantized to
