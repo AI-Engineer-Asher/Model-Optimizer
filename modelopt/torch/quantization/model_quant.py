@@ -25,6 +25,7 @@ from typing import Any, cast
 
 import torch
 import torch.nn as nn
+from torch.distributed.fsdp import FSDPModule
 
 import modelopt.torch.quantization as mtq
 import modelopt.torch.utils.distributed as dist
@@ -54,6 +55,7 @@ from .kv_cache_auto_quant import _validate_search_inputs as _validate_kv_cache_s
 from .mode import QuantizeModeRegistry, get_modelike_from_algo_cfg
 from .nn import AnyQuantizer, QuantModule, SequentialQuantizer, TensorQuantizer
 from .utils import is_quantized
+from .utils.core_utils import _get_fsdp2_mesh
 
 __all__ = [
     "auto_quantize",
@@ -68,6 +70,31 @@ __all__ = [
     "quantize",
     "temporarily_fold_weights",
 ]
+
+
+def _refuse_awq_on_a_sharded_fsdp2_model(
+    model: nn.Module, algorithm: QuantizeAlgoCfgType, candidate: str | None = None
+) -> None:
+    """Refuse AWQ calibration of an FSDP2 model sharded over several ranks, before it starts.
+
+    Each rank calibrates on its own data and folds the AWQ scale it picks into its own weight
+    shard, so the shards would not match. Every rank decides alike, from the run and the model.
+    """
+    if dist.size() == 1 or not dist.is_fsdp2_model(model):
+        return
+    methods = [mode.removesuffix("_calibrate") for mode, _ in get_modelike_from_algo_cfg(algorithm)]
+    awq = [method for method in methods if method in ("awq_lite", "awq_full")]
+    if awq:
+        # For the message only: the FSDP2 shard mesh can be narrower than the run (HSDP, 2D).
+        mesh = _get_fsdp2_mesh(next(m for m in model.modules() if isinstance(m, FSDPModule)))
+        ranks = mesh.size(-1) if mesh is not None else dist.size()
+        what = f"AutoQuantize candidate {candidate!r} calibrates" if candidate else "Calibrating"
+        raise NotImplementedError(
+            f"{what} with {', '.join(awq)}, which is not supported yet on an FSDP2 model sharded "
+            f"over {ranks} ranks: each rank calibrates on its own data and folds the AWQ scale it "
+            "picks into its own weight shard, so the shards would not match. Calibrate in a single "
+            "process, or with an algorithm other than AWQ."
+        )
 
 
 # TODO: Descriptors for the supported algorithms
@@ -99,6 +126,7 @@ def calibrate(
 
     Returns: The calibrated pytorch model.
     """
+    _refuse_awq_on_a_sharded_fsdp2_model(model, algorithm)
     if forward_loop is not None:
         # get the number of arguments of forward_loop
         num_args = len(inspect.signature(forward_loop).parameters)
@@ -439,6 +467,7 @@ def quantize(
     Returns: A pytorch model which has been quantized and calibrated.
     """
     quantize_config = QuantizeConfig(**dict(config))
+    _refuse_awq_on_a_sharded_fsdp2_model(model, config.get("algorithm"))
     if not is_quantized(model):
         model = apply_mode(model, mode=[("quantize", dict(config))], registry=QuantizeModeRegistry)
     else:
@@ -996,6 +1025,8 @@ def auto_quantize(
                 "Please run auto_quantize with 'max' or 'mse' calibration and use "
                 "get_auto_quantize_config() to obtain a config for mtq.quantize()."
             )
+        # Every candidate, before the search calibrates any: calibrate() would refuse mid-search.
+        _refuse_awq_on_a_sharded_fsdp2_model(model, algo, candidate=name)
 
     # Select the appropriate searcher based on method
     if method_name not in AUTO_QUANTIZE_SEARCHERS:
