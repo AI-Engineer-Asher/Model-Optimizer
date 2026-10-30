@@ -29,10 +29,30 @@ from typing import TYPE_CHECKING
 
 import torch
 import torch.distributed as dist
+from packaging.version import parse
 from torch.distributed.nn.functional import all_to_all_single as autograd_all_to_all_single
 
 if TYPE_CHECKING:
     from torch import nn
+
+
+def require_transformers(min_version: str, feature: str) -> None:
+    """Fail loudly if the installed transformers is older than ``min_version`` (the floor for ``feature``).
+
+    Callers enforce the version where the needed APIs first exist, so a too-old transformers errors
+    clearly instead of silently mis-behaving (e.g. transformers 5.5 silently shards nothing for EP).
+    A pre-release of the floor release (``5.7.0.dev0`` for ``5.7``) is refused too: it can predate
+    the feature the floor stands for.
+    """
+    # Imported here: this module imports without transformers.
+    import transformers
+
+    have = transformers.__version__
+    if parse(have) < parse(min_version):
+        raise RuntimeError(
+            f"{feature} requires transformers >= {min_version}, but {have} is installed. "
+            f"Upgrade with: pip install -U 'transformers>={min_version}'."
+        )
 
 
 def _ep_config(hf_config):
